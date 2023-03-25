@@ -240,9 +240,16 @@ func main() {
 			OrganizationIdentifiers: identifiers,
 			Locations:               []models.Location{address},
 		}
-		err = nppesDatabase.CreateOrganization(&org)
-		log.Printf(" %v", err)
-		log.Printf(" %v", rec)
+
+		foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
+		if err != nil {
+			log.Printf("Creating Organization %v", err)
+
+			err = nppesDatabase.CreateOrganization(&org)
+		} else {
+			log.Fatalf("Found Existing Organization %v", foundOrg)
+			return
+		}
 
 	}
 }

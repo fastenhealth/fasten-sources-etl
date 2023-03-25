@@ -6,6 +6,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
+	"log"
 	"net/url"
 	"strings"
 )
@@ -88,13 +89,36 @@ func (sr *SqliteRepository) CreateOrganization(org *models.Organization) error {
 	return sr.GormClient.Create(org).Error
 }
 
-func (sr *SqliteRepository) FindOrganization(orgId string) (*models.Organization, error) {
+func (sr *SqliteRepository) FindOrganizationById(orgId string) (*models.Organization, error) {
 	var org models.Organization
 	err := sr.GormClient.First(&org, "id = ?", orgId).Error
 	if err != nil {
 		return nil, err
 	}
 	return &org, nil
+}
+
+func (sr *SqliteRepository) FindOrganizationByIdentifiers(identifiers []models.OrganizationIdentifier) (*models.Organization, error) {
+
+	var orgIdentifier models.OrganizationIdentifier
+	for _, identifier := range identifiers {
+		err := sr.GormClient.Preload("Organization").
+			Preload("Organization.Locations").
+			Preload("Organization.Endpoints").
+			Preload("Organization.OrganizationIdentifiers").
+			Where(models.OrganizationIdentifier{IdentifierType: identifier.IdentifierType, IdentifierValue: identifier.IdentifierValue}).
+			First(&orgIdentifier).Error
+		if err == nil {
+			break
+		}
+	}
+
+	if orgIdentifier.OrganizationID != "" {
+		log.Printf("Found organization: %v", orgIdentifier.OrganizationID)
+		return orgIdentifier.Organization, nil
+	}
+
+	return nil, fmt.Errorf("No organization found for identifiers: %v", identifiers)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
