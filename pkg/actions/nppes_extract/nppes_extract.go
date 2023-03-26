@@ -135,7 +135,7 @@ func main() {
 
 		var name string
 		var alias string
-		if rec[NPPESColumnTypeEntityTypeCode] == "2" { //organization
+		if rec[NPPESColumnTypeEntityTypeCode] == string(models.OrganizationTypeTypeOrganization) { //organization
 			name = rec[NPPESColumnTypeOrganizationName]
 			alias = rec[NPPESColumnTypeProviderOtherOrganizationName]
 		} else {
@@ -166,31 +166,7 @@ func main() {
 		log.Printf("Parent Organization LBN: %s", rec[NPPESColumTypeParentOrganizationLBN])
 		log.Printf("Parent Organization TIN: %s", rec[NPPESColumTypeParentOrganizationTIN])
 
-		orgId, err := utils.NormalizeOrganizationId(name)
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-
-		identifiers := []models.OrganizationIdentifier{
-			models.OrganizationIdentifier{
-				IdentifierValue:   orgId,
-				IdentifierType:    models.OrganizationIdentifierTypeName,
-				IdentifierDisplay: name,
-			},
-		}
-		if len(alias) > 0 {
-			aliasId, err := utils.NormalizeOrganizationId(alias)
-			if err != nil {
-				log.Fatal(err)
-				return
-			}
-			identifiers = append(identifiers, models.OrganizationIdentifier{
-				IdentifierValue:   aliasId,
-				IdentifierType:    models.OrganizationIdentifierTypeName,
-				IdentifierDisplay: alias,
-			})
-		}
+		identifiers := []models.OrganizationIdentifier{}
 
 		if len(rec[NPPESColumnTypeNPI]) > 0 {
 			if rec[NPPESColumTypeIsOrganizationSubpart] == "Y" {
@@ -230,8 +206,7 @@ func main() {
 		}
 
 		org := models.Organization{
-			ID:               orgId,
-			OrganizationType: rec[1],
+			OrganizationType: models.OrganizationTypeType(rec[1]),
 			Name:             name,
 			//Addresses:                    []string{},
 			CreatedAt:        time.Now(),
@@ -241,6 +216,20 @@ func main() {
 			//Links
 			OrganizationIdentifiers: identifiers,
 			Locations:               []models.Location{address},
+		}
+
+		//add name identifiers
+		if len(alias) > 0 {
+			aliasId, err := utils.NormalizeOrganizationName(alias)
+			if err != nil {
+				log.Fatal(err)
+				return
+			}
+			identifiers = append(identifiers, models.OrganizationIdentifier{
+				IdentifierValue:   aliasId,
+				IdentifierType:    models.OrganizationIdentifierTypeName,
+				IdentifierDisplay: alias,
+			})
 		}
 
 		foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
@@ -253,6 +242,11 @@ func main() {
 				return
 			}
 		} else {
+			//only organizations can have multiple identifiers, so if we find an individual or sole practitioner, we should skip (we cant process this)
+			if foundOrg.OrganizationType == models.OrganizationTypeTypeIndividual {
+				continue
+			}
+
 			foundOrgJson, _ := json.Marshal(foundOrg)
 			log.Printf("Found Existing Organization: %v", string(foundOrgJson))
 

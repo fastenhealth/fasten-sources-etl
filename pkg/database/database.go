@@ -108,6 +108,7 @@ func (sr *SqliteRepository) FindOrganizationByIdentifiers(identifiers []models.O
 			Preload("Organization.OrganizationIdentifiers").
 			Where(models.OrganizationIdentifier{IdentifierType: identifier.IdentifierType, IdentifierValue: identifier.IdentifierValue}).
 			First(&orgIdentifier).Error
+
 		if err == nil {
 			break
 		}

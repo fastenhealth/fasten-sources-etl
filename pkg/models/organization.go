@@ -1,23 +1,32 @@
 package models
 
 import (
+	"fmt"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/utils"
 	"golang.org/x/exp/slices"
+	"gorm.io/gorm"
 	"log"
 	"time"
 )
 
+type OrganizationTypeType string
+
+const (
+	OrganizationTypeTypeIndividual   OrganizationTypeType = "1"
+	OrganizationTypeTypeOrganization OrganizationTypeType = "2"
+)
+
 type Organization struct {
-	ID        string     `json:"id" gorm:"type:primary_key;"` //
+	ID        string     `json:"id" gorm:"type:primary_key;"` //NPI for individuals, based on ID for organizations
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty" gorm:"index"`
 
-	OrganizationType string   `json:"organization_type"`
-	Name             string   `json:"name"`
-	Taxonomy         []string `json:"taxonomy" gorm:"type:text;serializer:json"` // Taxonomy code mapping: http://www.wpc-edi.com/reference/codelists/healthcare/health-care-provider-taxonomy-code-set/
-	IsSoleProprietor bool     `json:"is_sole_proprietor"`
-	RelatedUrls      []string `json:"related_urls" gorm:"type:text;serializer:json"`
+	OrganizationType OrganizationTypeType `json:"organization_type"`
+	Name             string               `json:"name"`
+	Taxonomy         []string             `json:"taxonomy" gorm:"type:text;serializer:json"` // Taxonomy code mapping: http://www.wpc-edi.com/reference/codelists/healthcare/health-care-provider-taxonomy-code-set/
+	IsSoleProprietor bool                 `json:"is_sole_proprietor"`
+	RelatedUrls      []string             `json:"related_urls" gorm:"type:text;serializer:json"`
 	//Source Updated At?
 
 	Locations               []Location               `json:"-" gorm:"many2many:org_locations;"`
@@ -25,17 +34,53 @@ type Organization struct {
 	OrganizationIdentifiers []OrganizationIdentifier `json:"-"`
 }
 
+func (oi *Organization) NormalizeOrganizationId() (string, error) {
+	normalizedName, err := utils.NormalizeOrganizationName(oi.Name)
+	if err != nil {
+		return "", fmt.Errorf("error normalizing organization name: %v", err)
+	}
+
+	if oi.OrganizationType == OrganizationTypeTypeIndividual {
+		//individuals should have their NPI as a suffix
+		for _, orgIdentifier := range oi.OrganizationIdentifiers {
+			if orgIdentifier.IdentifierType == OrganizationIdentifierTypePrimaryNPI {
+				return normalizedName + "-" + orgIdentifier.IdentifierValue, nil
+			}
+		}
+		return "", fmt.Errorf("error normalizing individual name: no NPI found for individual")
+	} else {
+		//return as-is
+		return normalizedName, nil
+	}
+}
+
+func (oi *Organization) BeforeCreate(tx *gorm.DB) error {
+	orgId, err := oi.NormalizeOrganizationId()
+	if err != nil {
+		return err
+	}
+	oi.ID = orgId
+
+	oi.OrganizationIdentifiers = append(oi.OrganizationIdentifiers, OrganizationIdentifier{
+		IdentifierValue:   orgId,
+		IdentifierType:    OrganizationIdentifierTypeName,
+		IdentifierDisplay: oi.Name,
+	})
+
+	return nil
+}
+
 //OrgA must be the "found"/"existing" organization (with an Id)
 func (orgA *Organization) MergeHasChanges(orgB *Organization) (hasChanges bool) {
 	hasChanges = false
 
-	orgAId, err := utils.NormalizeOrganizationId(orgA.Name)
+	orgAId, err := orgA.NormalizeOrganizationId()
 	if err != nil {
 		log.Printf("Error normalizing organization name: %s", err)
 		return hasChanges
 	}
 
-	orgBId, err := utils.NormalizeOrganizationId(orgB.Name)
+	orgBId, err := orgB.NormalizeOrganizationId()
 	if err != nil {
 		log.Printf("Error normalizing organization name: %s", err)
 		return hasChanges

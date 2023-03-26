@@ -33,7 +33,7 @@ func NormalizeEndpointId(url string) string {
 	return strings.ToLower(NormalizeEndpointURL(url))
 }
 
-func NormalizeOrganizationId(orgName string) (string, error) {
+func NormalizeOrganizationName(orgName string) (string, error) {
 	orgName = strings.ReplaceAll(orgName, "-", " ")
 	orgName = strings.ReplaceAll(orgName, "/", " ")
 	orgName = strings.ReplaceAll(orgName, ",", " ")
@@ -48,18 +48,23 @@ func NormalizeOrganizationId(orgName string) (string, error) {
 
 func NormalizeLocationId(addrLines []string, addrCity string, addrState string, addrZip string, addrCountry string) (string, error) {
 
-	addr, err := address.NewValid(
+	if len(addrZip) > 5 {
+		addrZip = addrZip[:5]
+	}
+
+	addr, _ := address.NewValid(
 		address.WithStreetAddress(addrLines),
 		address.WithLocality(addrCity),
 		address.WithAdministrativeArea(addrState),
-		address.WithPostCode(addrZip[:5]),
+		address.WithPostCode(addrZip),
 		address.WithCountry(addrCountry),
 	)
-	if err != nil {
-		addrStr := fmt.Sprintf("address: %v, %s, %s, %s, %s", addrLines, addrCity, addrState, addrZip, addrCountry)
-
-		return "", fmt.Errorf("error normalizing location(%s) id: %v", addrStr, err)
-	}
+	//if err != nil {
+	//	log.Printf("addr: %s", addr)
+	//	addrStr := fmt.Sprintf("address: %v, %s, %s, %s, %s", addrLines, addrCity, addrState, addrZip, addrCountry)
+	//
+	//	return "", fmt.Errorf("error normalizing location(%s) id: %v", addrStr, err)
+	//}
 
 	defStringFormatter := address.DefaultFormatter{
 		Output: address.StringOutputter{},
@@ -67,5 +72,5 @@ func NormalizeLocationId(addrLines []string, addrCity string, addrState string, 
 
 	locationId := strings.Join(strings.Split(defStringFormatter.Format(addr, "en"), "\n"), ",")
 
-	return locationId, err
+	return locationId, nil
 }
