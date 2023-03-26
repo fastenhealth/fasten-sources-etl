@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"github.com/Boostport/address"
 	"regexp"
 	"strings"
 )
@@ -43,4 +44,28 @@ func NormalizeOrganizationId(orgName string) (string, error) {
 	}
 	characterStrippedName := reg.ReplaceAllString(orgName, "")
 	return strings.ToUpper(characterStrippedName), nil
+}
+
+func NormalizeLocationId(addrLines []string, addrCity string, addrState string, addrZip string, addrCountry string) (string, error) {
+
+	addr, err := address.NewValid(
+		address.WithStreetAddress(addrLines),
+		address.WithLocality(addrCity),
+		address.WithAdministrativeArea(addrState),
+		address.WithPostCode(addrZip[:5]),
+		address.WithCountry(addrCountry),
+	)
+	if err != nil {
+		addrStr := fmt.Sprintf("address: %v, %s, %s, %s, %s", addrLines, addrCity, addrState, addrZip, addrCountry)
+
+		return "", fmt.Errorf("error normalizing location(%s) id: %v", addrStr, err)
+	}
+
+	defStringFormatter := address.DefaultFormatter{
+		Output: address.StringOutputter{},
+	}
+
+	locationId := strings.Join(strings.Split(defStringFormatter.Format(addr, "en"), "\n"), ",")
+
+	return locationId, err
 }

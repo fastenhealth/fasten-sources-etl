@@ -1,6 +1,7 @@
 package models
 
 import (
+	"github.com/fastenhealth/fasten-sources-etl/pkg/utils"
 	"time"
 )
 
@@ -14,4 +15,17 @@ type Endpoint struct {
 	URL          string `json:"url" gorm:"unique"` //guaranteed to have https/http scheme and '/' suffix
 	SourceUrl    string `json:"source_url"`
 	PlatformType string `json:"platform_type"`
+}
+
+func (endA *Endpoint) Equal(endB *Endpoint) bool {
+	if utils.NormalizeEndpointId(endA.URL) != utils.NormalizeEndpointId(endB.URL) {
+		return false
+	}
+	if endA.SourceUrl != endB.SourceUrl {
+		return false
+	}
+	if endA.PlatformType != endB.PlatformType {
+		return false
+	}
+	return true
 }

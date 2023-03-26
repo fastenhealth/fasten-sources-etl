@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/database"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/models"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/utils"
@@ -98,8 +99,9 @@ func main() {
 	}
 	//w := csv.NewWriter(csvOut)
 	//defer csvOut.Close()
-
+	count := 0
 	for {
+		count += 1
 		rec, err := r.Read()
 		if err != nil {
 			if err == io.EOF {
@@ -246,12 +248,27 @@ func main() {
 			log.Printf("Creating Organization %v", err)
 
 			err = nppesDatabase.CreateOrganization(&org)
+			if err != nil {
+				log.Fatal(err)
+				return
+			}
 		} else {
-			log.Fatalf("Found Existing Organization %v", foundOrg)
-			return
-		}
+			foundOrgJson, _ := json.Marshal(foundOrg)
+			log.Printf("Found Existing Organization: %v", string(foundOrgJson))
 
+			//check if they are exact matches.
+			if foundOrg.MergeHasChanges(&org) {
+				updatedOrgJson, _ := json.Marshal(foundOrg)
+				log.Fatalf("Updating Organization %v", string(updatedOrgJson))
+				err = nppesDatabase.UpdateOrganization(&org)
+				if err != nil {
+					log.Fatal(err)
+					return
+				}
+			}
+		}
 	}
+	log.Printf("FINISHED PROCESSING RECORDs %d", count)
 }
 
 func taxonomyCodes(record []string) []string {
