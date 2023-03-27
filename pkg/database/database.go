@@ -6,7 +6,6 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
-	"log"
 	"net/url"
 	"strings"
 )
@@ -39,7 +38,7 @@ func NewRepository(globalLogger logrus.FieldLogger) (*SqliteRepository, error) {
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 
-	if strings.ToUpper("DEBUG") == "DEBUG" {
+	if strings.ToUpper("INFO") == "DEBUG" {
 		database = database.Debug() //set debug globally
 	}
 
@@ -115,7 +114,6 @@ func (sr *SqliteRepository) FindOrganizationByIdentifiers(identifiers []models.O
 	}
 
 	if orgIdentifier.OrganizationID != "" {
-		log.Printf("Found organization: %v", orgIdentifier.OrganizationID)
 		return orgIdentifier.Organization, nil
 	}
 

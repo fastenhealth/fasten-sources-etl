@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/database"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/models"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/utils"
+	progressbar "github.com/schollz/progressbar/v3"
 	"github.com/sirupsen/logrus"
 	"io"
 	"log"
@@ -85,11 +87,21 @@ const (
 )
 
 func main() {
+	filePath := "/Users/jason/Downloads/NPPES_Data_Dissemination_September_2022/npidata_pfile_20050523-20220911-1000.csv"
 	// setup reader
-	csvIn, err := os.Open("/Users/jason/Downloads/NPPES_Data_Dissemination_September_2022/npidata_pfile_20050523-20220911-1000.csv")
+	lines, err := utils.FileLineCount(filePath)
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("total lines: %d", lines)
+
+	bar := progressbar.Default(int64(lines))
+
+	csvIn, err := os.Open(filePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer csvIn.Close()
 	r := csv.NewReader(csvIn)
 
 	// setup database
@@ -97,11 +109,16 @@ func main() {
 	if err != nil {
 		log.Fatal("Unable to open/load database")
 	}
-	//w := csv.NewWriter(csvOut)
-	//defer csvOut.Close()
+
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	//
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 	count := 0
 	for {
 		count += 1
+		bar.Add(1)
+
 		rec, err := r.Read()
 		if err != nil {
 			if err == io.EOF {
@@ -133,115 +150,20 @@ func main() {
 			continue
 		}
 
-		var name string
-		var alias string
-		if rec[NPPESColumnTypeEntityTypeCode] == string(models.OrganizationTypeTypeOrganization) { //organization
-			name = rec[NPPESColumnTypeOrganizationName]
-			alias = rec[NPPESColumnTypeProviderOtherOrganizationName]
-		} else {
-			parts := []string{
-				rec[NPPESColumnTypeProviderNamePrefix],
-				rec[NPPESColumnTypeProviderFirstName],
-				rec[NPPESColumnTypeProviderMiddleName],
-				rec[NPPESColumnTypeProviderLastName],
-				rec[NPPESColumnTypeProviderNameSuffix],
-			}
-			parts = deleteEmpty(parts)
-			name = strings.Join(parts, " ")
-
-			aliasParts := []string{
-				rec[NPPESColumnTypeProviderOtherNamePrefix],
-				rec[NPPESColumnTypeProviderOtherFirstName],
-				rec[NPPESColumnTypeProviderOtherMiddleName],
-				rec[NPPESColumnTypeProviderOtherLastName],
-				rec[NPPESColumnTypeProviderOtherNameSuffix],
-			}
-			aliasParts = deleteEmpty(aliasParts)
-			if len(aliasParts) > 1 {
-				alias = strings.Join(parts, " ")
-			}
-		}
-
-		log.Printf("Is Organization Subpart: %s", rec[NPPESColumTypeIsOrganizationSubpart])
-		log.Printf("Parent Organization LBN: %s", rec[NPPESColumTypeParentOrganizationLBN])
-		log.Printf("Parent Organization TIN: %s", rec[NPPESColumTypeParentOrganizationTIN])
-
-		identifiers := []models.OrganizationIdentifier{}
-
-		if len(rec[NPPESColumnTypeNPI]) > 0 {
-			if rec[NPPESColumTypeIsOrganizationSubpart] == "Y" {
-				identifiers = append(identifiers, models.OrganizationIdentifier{
-					IdentifierValue: rec[NPPESColumnTypeNPI],
-					IdentifierType:  models.OrganizationIdentifierTypeNPI,
-				})
-			} else {
-				//add as primary and secondary NPI
-				identifiers = append(identifiers, models.OrganizationIdentifier{
-					IdentifierValue: rec[NPPESColumnTypeNPI],
-					IdentifierType:  models.OrganizationIdentifierTypePrimaryNPI,
-				})
-				identifiers = append(identifiers, models.OrganizationIdentifier{
-					IdentifierValue: rec[NPPESColumnTypeNPI],
-					IdentifierType:  models.OrganizationIdentifierTypeNPI,
-				})
-			}
-		}
-
-		if len(rec[NPPESColumnTypeEIN]) > 0 {
-			identifiers = append(identifiers, models.OrganizationIdentifier{
-				IdentifierValue: rec[NPPESColumnTypeEIN],
-				IdentifierType:  models.OrganizationIdentifierTypeEIN,
-			})
-		}
-
-		address := models.Location{
-			Line: deleteEmpty([]string{
-				rec[NPPESColumnTypeProviderFirstLineBusinessPracticeLocationAddress],
-				rec[NPPESColumnTypeProviderSecondLineBusinessPracticeLocationAddress],
-			}),
-			City:       rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressCityName],
-			State:      rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressStateName],
-			PostalCode: rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressPostalCode],
-			Country:    rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressCountryCode],
-		}
-
-		org := models.Organization{
-			OrganizationType: models.OrganizationTypeType(rec[1]),
-			Name:             name,
-			//Addresses:                    []string{},
-			CreatedAt:        time.Now(),
-			Taxonomy:         taxonomyCodes(rec),
-			IsSoleProprietor: rec[NPPESColumTypeIsSoleProprietor] == "Y",
-
-			//Links
-			OrganizationIdentifiers: identifiers,
-			Locations:               []models.Location{address},
-		}
-
-		//add name identifiers
-		if len(alias) > 0 {
-			aliasId, err := utils.NormalizeOrganizationName(alias)
-			if err != nil {
-				log.Fatal(err)
-				return
-			}
-			identifiers = append(identifiers, models.OrganizationIdentifier{
-				IdentifierValue:   aliasId,
-				IdentifierType:    models.OrganizationIdentifierTypeName,
-				IdentifierDisplay: alias,
-			})
-		}
-
-		foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
+		org, err := nppesRowToOrganization(rec)
 		if err != nil {
-			log.Printf("Creating Organization %v", err)
+			log.Fatal(err)
+		}
 
-			err = nppesDatabase.CreateOrganization(&org)
-			if err != nil {
-				log.Fatal(err)
-				return
-			}
-		} else {
+		bar.Describe(fmt.Sprintf("Processing %s", org.Name))
+
+		//Optomistic Insert.
+		//Attempt to creat the organization, if it fails, then we need to update it.
+		err = nppesDatabase.CreateOrganization(org)
+		if err != nil {
+			//organization may already exist
+			foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
+
 			//only organizations can have multiple identifiers, so if we find an individual or sole practitioner, we should skip (we cant process this)
 			if foundOrg.OrganizationType == models.OrganizationTypeTypeIndividual {
 				continue
@@ -251,18 +173,121 @@ func main() {
 			log.Printf("Found Existing Organization: %v", string(foundOrgJson))
 
 			//check if they are exact matches.
-			if foundOrg.MergeHasChanges(&org) {
+			if foundOrg.MergeHasChanges(org) {
 				updatedOrgJson, _ := json.Marshal(foundOrg)
 				log.Fatalf("Updating Organization %v", string(updatedOrgJson))
-				err = nppesDatabase.UpdateOrganization(&org)
+				err = nppesDatabase.UpdateOrganization(org)
 				if err != nil {
 					log.Fatal(err)
 					return
 				}
 			}
+
 		}
 	}
+
 	log.Printf("FINISHED PROCESSING RECORDs %d", count)
+}
+
+func nppesRowToOrganization(rec []string) (*models.Organization, error) {
+	var name string
+	var alias string
+	if rec[NPPESColumnTypeEntityTypeCode] == string(models.OrganizationTypeTypeOrganization) { //organization
+		name = rec[NPPESColumnTypeOrganizationName]
+		alias = rec[NPPESColumnTypeProviderOtherOrganizationName]
+	} else {
+		parts := []string{
+			rec[NPPESColumnTypeProviderNamePrefix],
+			rec[NPPESColumnTypeProviderFirstName],
+			rec[NPPESColumnTypeProviderMiddleName],
+			rec[NPPESColumnTypeProviderLastName],
+			rec[NPPESColumnTypeProviderNameSuffix],
+		}
+		parts = deleteEmpty(parts)
+		name = strings.Join(parts, " ")
+
+		aliasParts := []string{
+			rec[NPPESColumnTypeProviderOtherNamePrefix],
+			rec[NPPESColumnTypeProviderOtherFirstName],
+			rec[NPPESColumnTypeProviderOtherMiddleName],
+			rec[NPPESColumnTypeProviderOtherLastName],
+			rec[NPPESColumnTypeProviderOtherNameSuffix],
+		}
+		aliasParts = deleteEmpty(aliasParts)
+		if len(aliasParts) > 1 {
+			alias = strings.Join(parts, " ")
+		}
+	}
+
+	//log.Printf("Is Organization Subpart: %s", rec[NPPESColumTypeIsOrganizationSubpart])
+	//log.Printf("Parent Organization LBN: %s", rec[NPPESColumTypeParentOrganizationLBN])
+	//log.Printf("Parent Organization TIN: %s", rec[NPPESColumTypeParentOrganizationTIN])
+
+	identifiers := []models.OrganizationIdentifier{}
+
+	if len(rec[NPPESColumnTypeNPI]) > 0 {
+		if rec[NPPESColumTypeIsOrganizationSubpart] == "Y" {
+			identifiers = append(identifiers, models.OrganizationIdentifier{
+				IdentifierValue: rec[NPPESColumnTypeNPI],
+				IdentifierType:  models.OrganizationIdentifierTypeNPI,
+			})
+		} else {
+			//add as primary and secondary NPI
+			identifiers = append(identifiers, models.OrganizationIdentifier{
+				IdentifierValue: rec[NPPESColumnTypeNPI],
+				IdentifierType:  models.OrganizationIdentifierTypePrimaryNPI,
+			})
+			identifiers = append(identifiers, models.OrganizationIdentifier{
+				IdentifierValue: rec[NPPESColumnTypeNPI],
+				IdentifierType:  models.OrganizationIdentifierTypeNPI,
+			})
+		}
+	}
+
+	if len(rec[NPPESColumnTypeEIN]) > 0 {
+		identifiers = append(identifiers, models.OrganizationIdentifier{
+			IdentifierValue: rec[NPPESColumnTypeEIN],
+			IdentifierType:  models.OrganizationIdentifierTypeEIN,
+		})
+	}
+
+	address := models.Location{
+		Line: deleteEmpty([]string{
+			rec[NPPESColumnTypeProviderFirstLineBusinessPracticeLocationAddress],
+			rec[NPPESColumnTypeProviderSecondLineBusinessPracticeLocationAddress],
+		}),
+		City:       rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressCityName],
+		State:      rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressStateName],
+		PostalCode: rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressPostalCode],
+		Country:    rec[NPPESColumnTypeProviderBusinessPracticeLocationAddressCountryCode],
+	}
+
+	org := models.Organization{
+		OrganizationType: models.OrganizationTypeType(rec[1]),
+		Name:             name,
+		//Addresses:                    []string{},
+		CreatedAt:        time.Now(),
+		Taxonomy:         taxonomyCodes(rec),
+		IsSoleProprietor: rec[NPPESColumTypeIsSoleProprietor] == "Y",
+
+		//Links
+		OrganizationIdentifiers: identifiers,
+		Locations:               []models.Location{address},
+	}
+
+	//add name identifiers
+	if len(alias) > 0 {
+		aliasId, err := utils.NormalizeOrganizationName(alias)
+		if err != nil {
+			return nil, err
+		}
+		identifiers = append(identifiers, models.OrganizationIdentifier{
+			IdentifierValue:   aliasId,
+			IdentifierType:    models.OrganizationIdentifierTypeName,
+			IdentifierDisplay: alias,
+		})
+	}
+	return &org, nil
 }
 
 func taxonomyCodes(record []string) []string {
