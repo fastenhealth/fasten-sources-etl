@@ -1,10 +1,8 @@
 package models
 
 import (
-	"fmt"
 	"github.com/fastenhealth/fasten-sources-etl/pkg/utils"
 	"golang.org/x/exp/slices"
-	"gorm.io/gorm"
 	"log"
 	"time"
 )
@@ -17,7 +15,7 @@ const (
 )
 
 type Organization struct {
-	ID        string     `json:"id" gorm:"type:primary_key;"` //NPI for individuals, based on ID for organizations
+	ID        string     `json:"id" gorm:"type:primary_key;"` //NPI
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty" gorm:"index"`
@@ -34,66 +32,50 @@ type Organization struct {
 	OrganizationIdentifiers []OrganizationIdentifier `json:"-"`
 }
 
-func (oi *Organization) NormalizeOrganizationId() (string, error) {
-	normalizedName, err := utils.NormalizeOrganizationName(oi.Name)
-	if err != nil {
-		return "", fmt.Errorf("error normalizing organization name: %v", err)
-	}
-
-	if oi.OrganizationType == OrganizationTypeTypeIndividual {
-		//individuals should have their NPI as a suffix
-		for _, orgIdentifier := range oi.OrganizationIdentifiers {
-			if orgIdentifier.IdentifierType == OrganizationIdentifierTypePrimaryNPI {
-				return normalizedName + "-" + orgIdentifier.IdentifierValue, nil
-			}
-		}
-		return "", fmt.Errorf("error normalizing individual name: no NPI found for individual")
-	} else {
-		//return as-is
-		return normalizedName, nil
-	}
+func (oi *Organization) NormalizeOrganizationName() (string, error) {
+	return utils.NormalizeOrganizationName(oi.Name)
 }
 
-func (oi *Organization) BeforeCreate(tx *gorm.DB) error {
-	orgId, err := oi.NormalizeOrganizationId()
-	if err != nil {
-		return err
-	}
-	oi.ID = orgId
-
-	oi.OrganizationIdentifiers = append(oi.OrganizationIdentifiers, OrganizationIdentifier{
-		IdentifierValue:   orgId,
-		IdentifierType:    OrganizationIdentifierTypeName,
-		IdentifierDisplay: oi.Name,
-	})
-
-	return nil
-}
+//func (oi *Organization) BeforeCreate(tx *gorm.DB) error {
+//	orgId, err := oi.NormalizeOrganizationId()
+//	if err != nil {
+//		return err
+//	}
+//	oi.ID = orgId
+//
+//	oi.OrganizationIdentifiers = append(oi.OrganizationIdentifiers, OrganizationIdentifier{
+//		IdentifierValue:   orgId,
+//		IdentifierType:    OrganizationIdentifierTypeName,
+//		IdentifierDisplay: oi.Name,
+//	})
+//
+//	return nil
+//}
 
 //OrgA must be the "found"/"existing" organization (with an Id)
 func (orgA *Organization) MergeHasChanges(orgB *Organization) (hasChanges bool) {
 	hasChanges = false
 
-	orgAId, err := orgA.NormalizeOrganizationId()
+	orgAName, err := orgA.NormalizeOrganizationName()
 	if err != nil {
 		log.Printf("Error normalizing organization name: %s", err)
 		return hasChanges
 	}
 
-	orgBId, err := orgB.NormalizeOrganizationId()
+	orgBName, err := orgB.NormalizeOrganizationName()
 	if err != nil {
 		log.Printf("Error normalizing organization name: %s", err)
 		return hasChanges
 	}
 
-	if orgAId != orgBId {
+	if orgAName != orgBName {
 		hasChanges = true
 		log.Printf("found new organization name, adding as alias")
 		//add a new organization name (alias)
 		orgA.OrganizationIdentifiers = append(orgA.OrganizationIdentifiers, OrganizationIdentifier{
-			IdentifierValue:   orgBId,
+			IdentifierValue:   orgBName,
 			IdentifierDisplay: orgB.Name,
-			IdentifierType:    OrganizationIdentifierTypeNPI,
+			IdentifierType:    OrganizationIdentifierTypeName,
 		})
 
 	}

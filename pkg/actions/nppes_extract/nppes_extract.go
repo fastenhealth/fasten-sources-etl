@@ -87,9 +87,168 @@ const (
 )
 
 func main() {
-	filePath := "/Users/jason/Downloads/NPPES_Data_Dissemination_September_2022/npidata_pfile_20050523-20220911-1000.csv"
+	filePath := "/Users/jason/Downloads/NPPES_Data_Dissemination_September_2022/npidata_pfile_20050523-20220911	.csv"
+
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// First pass, add all Primary Organizations and Individual Providers to database
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	err := nppesProcessor(filePath, func(progress *progressbar.ProgressBar, nppesDatabase *database.SqliteRepository, csvReader *csv.Reader) error {
+		orgSubpartsPath := "data/org_subparts.csv"
+		orgSubpartsFile, err := os.OpenFile(orgSubpartsPath, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return err
+		}
+		defer orgSubpartsFile.Close()
+		csvSubpartsWriter := csv.NewWriter(orgSubpartsFile)
+
+		count := 0
+		for {
+			count += 1
+			progress.Add(1)
+
+			rec, err := csvReader.Read()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				log.Fatal(err)
+			}
+
+			//start processing entry. PSEUDOCODE:
+			//1. filter all entries that are deactivated (index 38, "NPI Deactivation Reason Code")
+			if rec[NPPESColumTypeNPIDeactivationReasonCode] != "" {
+				continue
+			}
+			//2. filter if missing entity type code (index 1, "Entity Type Code")
+			if rec[NPPESColumnTypeEntityTypeCode] == "" {
+				continue
+			}
+			////3. filter if not organization (index 1, "Entity Type Code") or individual (index 1, "Entity Type Code") with sole proprietor (index 307, "Is Sole Proprietor")
+			//if rec[1] != "1" && (rec[1] == "2" && rec[307] != "Y") {
+			//	continue
+			//}
+			//4. filter if missing organziation name (index 4, "Provider Organization Name (Legal Business Name)" or individual last name(index 5, "Provider Last Name (Legal Name)")
+			if rec[NPPESColumnTypeOrganizationName] == "" && rec[NPPESColumnTypeProviderLastName] == "" {
+				continue
+			}
+
+			//5. first pass, skip if Organization Subpart (index 308, "Is Organization Subpart")
+			if rec[NPPESColumTypeIsOrganizationSubpart] == "Y" {
+				csvSubpartsWriter.Write(rec)
+				csvSubpartsWriter.Flush()
+				continue
+			}
+
+			org, err := nppesRowToOrganization(rec)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			progress.Describe(fmt.Sprintf("Processing %s", org.Name))
+
+			//Optomistic Insert.
+			//Attempt to creat the organization, if it fails, then we need to update it.
+			err = nppesDatabase.CreateOrganization(org)
+			if err != nil {
+				//organization may already exist
+				foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
+
+				//only organizations can have multiple identifiers, so if we find an individual or sole practitioner, we should skip (we cant process this)
+				if foundOrg.OrganizationType == models.OrganizationTypeTypeIndividual {
+					continue
+				}
+
+				foundOrgJson, _ := json.Marshal(foundOrg)
+				log.Printf("Found Existing Organization: %v", string(foundOrgJson))
+
+				//check if they are exact matches.
+				if foundOrg.MergeHasChanges(org) {
+					updatedOrgJson, _ := json.Marshal(foundOrg)
+					log.Fatalf("Updating Organization %v", string(updatedOrgJson))
+					err = nppesDatabase.UpdateOrganization(org)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+			}
+		}
+		log.Printf("FINISHED PROCESSING RECORDs %d", count)
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// Second pass, add all Organization Subparts to database
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	err = nppesProcessor("data/org_subparts.csv", func(progress *progressbar.ProgressBar, nppesDatabase *database.SqliteRepository, csvReader *csv.Reader) error {
+		count := 0
+		for {
+			count += 1
+			progress.Add(1)
+
+			rec, err := csvReader.Read()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				log.Fatal(err)
+			}
+
+			//We've already done the following filtering:
+			//1. filter all entries that are deactivated (index 38, "NPI Deactivation Reason Code")
+			//2. filter if missing entity type code (index 1, "Entity Type Code")
+			//4. filter if missing organziation name (index 4, "Provider Organization Name (Legal Business Name)" or individual last name(index 5, "Provider Last Name (Legal Name)")
+			//5. all entries are Organization Subpart (index 308, "Is Organization Subpart")
+
+			//start processing entry
+			org, err := nppesRowToOrganization(rec)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			progress.Describe(fmt.Sprintf("Processing %s", org.Name))
+
+			//Find organization By NPI
+			foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
+			if err != nil {
+
+				//only organizations can have multiple identifiers, so if we find an individual or sole practitioner, we should skip (we cant process this)
+				if foundOrg.OrganizationType == models.OrganizationTypeTypeIndividual {
+					continue
+				}
+
+				//foundOrgJson, _ := json.Marshal(foundOrg)
+				//log.Printf("Found Existing Organization: %v", string(foundOrgJson))
+
+				//check if they are exact matches.
+				if foundOrg.MergeHasChanges(org) {
+					updatedOrgJson, _ := json.Marshal(foundOrg)
+					log.Fatalf("Updating Organization %v", string(updatedOrgJson))
+					err = nppesDatabase.UpdateOrganization(org)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+			} else {
+				//we could not find the organization (something is wrong)
+				log.Fatalf("Could not find organization %v", org)
+			}
+
+		}
+		log.Printf("FINISHED PROCESSING RECORDs %d", count)
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func nppesProcessor(csvPath string, processorBlock func(progress *progressbar.ProgressBar, nppesDatabase *database.SqliteRepository, csvReader *csv.Reader) error) error {
+
 	// setup reader
-	lines, err := utils.FileLineCount(filePath)
+	lines, err := utils.FileLineCount(csvPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -97,7 +256,7 @@ func main() {
 
 	bar := progressbar.Default(int64(lines))
 
-	csvIn, err := os.Open(filePath)
+	csvIn, err := os.Open(csvPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -110,83 +269,7 @@ func main() {
 		log.Fatal("Unable to open/load database")
 	}
 
-	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	//
-	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-	count := 0
-	for {
-		count += 1
-		bar.Add(1)
-
-		rec, err := r.Read()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			log.Fatal(err)
-		}
-
-		//start processing entry. PSEUDOCODE:
-		//1. filter all entries that are deactivated (index 38, "NPI Deactivation Reason Code")
-		if rec[NPPESColumTypeNPIDeactivationReasonCode] != "" {
-			continue
-		}
-		//2. filter if missing entity type code (index 1, "Entity Type Code")
-		if rec[NPPESColumnTypeEntityTypeCode] == "" {
-			continue
-		}
-		////3. filter if not organization (index 1, "Entity Type Code") or individual (index 1, "Entity Type Code") with sole proprietor (index 307, "Is Sole Proprietor")
-		//if rec[1] != "1" && (rec[1] == "2" && rec[307] != "Y") {
-		//	continue
-		//}
-		//4. filter if missing organziation name (index 4, "Provider Organization Name (Legal Business Name)" or individual last name(index 5, "Provider Last Name (Legal Name)")
-		if rec[NPPESColumnTypeOrganizationName] == "" && rec[NPPESColumnTypeProviderLastName] == "" {
-			continue
-		}
-
-		//5. first pass, skip if Organization Subpart (index 308, "Is Organization Subpart")
-		if rec[NPPESColumTypeIsOrganizationSubpart] == "Y" {
-			continue
-		}
-
-		org, err := nppesRowToOrganization(rec)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		bar.Describe(fmt.Sprintf("Processing %s", org.Name))
-
-		//Optomistic Insert.
-		//Attempt to creat the organization, if it fails, then we need to update it.
-		err = nppesDatabase.CreateOrganization(org)
-		if err != nil {
-			//organization may already exist
-			foundOrg, err := nppesDatabase.FindOrganizationByIdentifiers(org.OrganizationIdentifiers)
-
-			//only organizations can have multiple identifiers, so if we find an individual or sole practitioner, we should skip (we cant process this)
-			if foundOrg.OrganizationType == models.OrganizationTypeTypeIndividual {
-				continue
-			}
-
-			foundOrgJson, _ := json.Marshal(foundOrg)
-			log.Printf("Found Existing Organization: %v", string(foundOrgJson))
-
-			//check if they are exact matches.
-			if foundOrg.MergeHasChanges(org) {
-				updatedOrgJson, _ := json.Marshal(foundOrg)
-				log.Fatalf("Updating Organization %v", string(updatedOrgJson))
-				err = nppesDatabase.UpdateOrganization(org)
-				if err != nil {
-					log.Fatal(err)
-					return
-				}
-			}
-
-		}
-	}
-
-	log.Printf("FINISHED PROCESSING RECORDs %d", count)
+	return processorBlock(bar, nppesDatabase, r)
 }
 
 func nppesRowToOrganization(rec []string) (*models.Organization, error) {
@@ -223,7 +306,18 @@ func nppesRowToOrganization(rec []string) (*models.Organization, error) {
 	//log.Printf("Parent Organization LBN: %s", rec[NPPESColumTypeParentOrganizationLBN])
 	//log.Printf("Parent Organization TIN: %s", rec[NPPESColumTypeParentOrganizationTIN])
 
-	identifiers := []models.OrganizationIdentifier{}
+	orgName, err := utils.NormalizeOrganizationName(name)
+	if err != nil {
+		return nil, err
+	}
+
+	identifiers := []models.OrganizationIdentifier{
+		{
+			IdentifierValue:   orgName,
+			IdentifierType:    models.OrganizationIdentifierTypeName,
+			IdentifierDisplay: name,
+		},
+	}
 
 	if len(rec[NPPESColumnTypeNPI]) > 0 {
 		if rec[NPPESColumTypeIsOrganizationSubpart] == "Y" {
@@ -263,6 +357,7 @@ func nppesRowToOrganization(rec []string) (*models.Organization, error) {
 	}
 
 	org := models.Organization{
+		ID:               rec[NPPESColumnTypeNPI],
 		OrganizationType: models.OrganizationTypeType(rec[1]),
 		Name:             name,
 		//Addresses:                    []string{},
